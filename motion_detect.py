@@ -19,8 +19,9 @@ logger = logging.getLogger(__name__)
 stop_event = threading.Event()
 
 # --- GPU运动检测配置 ---
-GPU_DOWNSCALE = 4           # 缩放因子(越大越快,建议4-8)，最终处理尺寸为原图/downscale
-GPU_THRESHOLD = 30          # 运动检测阈值(1-255,越小越灵敏)
+GPU_DOWNSCALE = 1           # 缩放因子(越大越快,建议4-8)，最终处理尺寸为原图/downscale
+GPU_THRESHOLD = 60          # 运动检测阈值(1-255,越小越灵敏)
+HISTORY_FRAMES = 1         # 背景建模历史帧数，越大越稳定但适应慢
 
 def get_video_size(video_path):
     """获取视频原始尺寸"""
@@ -48,7 +49,7 @@ class OpenCLMotionDetector:
         #     varThreshold=threshold,
         #     detectShadows=True
         # )
-        self.backSub = cv2.createBackgroundSubtractorKNN(history=500, dist2Threshold=400.0, detectShadows=True)
+        self.backSub = cv2.createBackgroundSubtractorKNN(history=HISTORY_FRAMES, dist2Threshold=400.0, detectShadows=True)
         
         self.kernel_3x3 = np.ones((3, 3), np.uint8)
         
@@ -83,6 +84,7 @@ def decode_frames_gpu(video_path, frame_queue, stop_event, scaled_w, scaled_h):
         '-hwaccel', 'qsv',
         '-hwaccel_device', 'qsvhw',
         '-hwaccel_output_format', 'qsv',
+        '-re',
         '-i', video_path,
         '-vf', f'vpp_qsv=w={scaled_w}:h={scaled_h}:scale_mode=hq:denoise=30:framerate=20:format=bgra,hwdownload,format=bgra',
         '-f', 'rawvideo',
@@ -140,7 +142,7 @@ def start_realtime_preview(frame_queue, stop_event, width, height):
             contours, _ = cv2.findContours(thresh_cpu, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
             display_frame = frame.copy() 
             for cnt in contours:
-                if cv2.contourArea(cnt) < 500:
+                if cv2.contourArea(cnt) < 300:
                     continue
                 (x, y, w, h) = cv2.boundingRect(cnt)
                 cv2.rectangle(display_frame, (x, y), (x + w, y + h), (0, 0, 255), 2)
@@ -170,7 +172,9 @@ def main_preview(video_path):
         width, height = get_video_size(video_path)
     except:
         width, height = 1920, 1080 # 保底值
-        
+    global GPU_DOWNSCALE
+    if(GPU_DOWNSCALE < 1):
+            GPU_DOWNSCALE = 1
     scaled_w = width // GPU_DOWNSCALE
     scaled_h = height // GPU_DOWNSCALE
     logger.info(f"原始尺寸: {width}x{height}, 处理尺寸: {scaled_w}x{scaled_h}")
